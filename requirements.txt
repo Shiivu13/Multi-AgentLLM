@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+sqlalchemy
+asyncpg
+google-genai
+tenacity
+tiktoken
+httpx[http2]
