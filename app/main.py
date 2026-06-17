@@ -1,5 +1,8 @@
+from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.core.database import engine, Base
 # Import models to ensure they are registered with the metadata before creation
@@ -7,6 +10,8 @@ from app.models import logging, evals
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers.main_router import router as main_router
 from app.api.errors import AppError, app_error_handler, global_exception_handler
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,3 +46,10 @@ app.include_router(main_router)
 @app.get("/health")
 async def health_check() -> dict[str, str]:
     return {"status": "healthy"}
+
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.get("/", include_in_schema=False)
+    async def serve_index() -> FileResponse:
+        return FileResponse(str(STATIC_DIR / "index.html"))
