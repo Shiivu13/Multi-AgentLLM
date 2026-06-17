@@ -739,83 +739,87 @@ document.getElementById('form').addEventListener('submit', async (e) => {
   statBudget.textContent = '—';
   answerEl.classList.remove('empty');
   answerEl.innerHTML = '<span class="cursor"></span>';
-  let answerText = '';
 
-  try{
+  // All mutable state outside try so handleEvent can close over them properly
+  let answerText = '';
+  let activeAgent = null;
+
+  const handleEvent = (evt) => {
+    if (evt.type === 'agent_activity') {
+      const id = evt.agent;
+      if (evt.job_id) currentJobId = evt.job_id;
+      if (evt.status === 'starting') {
+        if (activeAgent && activeAgent !== id) {
+          setAgentState(activeAgent, 'done', 'done');
+        }
+        activeAgent = id;
+        setAgentState('orchestrator', 'active', 'routing → ' + id);
+        if (id !== 'completed') {
+          setAgentState(id, 'active', 'thinking…');
+        }
+        addFeedRow(id, evt.reasoning ? escapeHtml(evt.reasoning) : 'starting…');
+      } else if (evt.status === 'completed') {
+        setAgentState(id, 'done', 'done');
+        if (typeof evt.budget_remaining === 'number') {
+          statBudget.textContent = evt.budget_remaining.toLocaleString();
+        }
+        activeAgent = null;
+      }
+    } else if (evt.type === 'token') {
+      answerText += evt.content;
+      answerEl.innerHTML = escapeHtml(answerText) + '<span class="cursor"></span>';
+    } else if (evt.type === 'error') {
+      toast('Agent error: ' + (evt.content || 'unknown'));
+    }
+  };
+
+  try {
     const res = await fetch('/api/v1/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: q }),
     });
-    if (!res.ok || !res.body){
-      throw new Error('Request failed: '+res.status);
+    if (!res.ok || !res.body) {
+      throw new Error('Request failed: ' + res.status);
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let activeAgent = null;
+
     setAgentState('orchestrator', 'active', 'routing');
 
-    while (true){
+    // Line-by-line SSE parser — robust against any chunk boundaries
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let incomplete = '';
+
+    while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream:true });
-      let parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';
-      for (const block of parts){
-        const lines = block.split('\n').filter(l => l.startsWith('data: '));
-        for (const line of lines){
-          const payload = line.slice(6).trim();
-          if (!payload) continue;
-          let evt; try { evt = JSON.parse(payload); } catch { continue; }
-          handleEvent(evt);
-        }
+      incomplete += decoder.decode(value, { stream: true });
+      const lines = incomplete.split('\n');
+      incomplete = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        try {
+          handleEvent(JSON.parse(payload));
+        } catch (_) { /* malformed JSON — skip */ }
       }
     }
 
     setAgentState('orchestrator', 'done', 'done');
     statStatus.textContent = 'complete';
-    if (answerText.trim().length === 0){
-      answerEl.innerHTML = '<em style="color:var(--text-2)">No final answer was emitted. Check the reasoning feed for routing details.</em>';
+    if (answerText.trim().length === 0) {
+      answerEl.innerHTML = '<em style="color:var(--text-2)">Query handled directly — check reasoning feed for details.</em>';
     } else {
-      // Remove cursor
       answerEl.innerHTML = escapeHtml(answerText);
     }
-  } catch(err){
-    toast('Error: '+ err.message);
+  } catch (err) {
+    toast('Error: ' + err.message);
     statStatus.textContent = 'error';
-  } finally{
+    answerEl.innerHTML = `<em style="color:var(--neon-pink)">${escapeHtml(err.message)}</em>`;
+  } finally {
     isStreaming = false;
     sendBtn.disabled = false;
-  }
-
-  function handleEvent(evt){
-    if (evt.type === 'agent_activity'){
-      const id = evt.agent;
-      if (evt.job_id) currentJobId = evt.job_id;
-      if (evt.status === 'starting'){
-        if (activeAgent && activeAgent !== id){
-          setAgentState(activeAgent, 'done', 'done');
-        }
-        activeAgent = id;
-        setAgentState('orchestrator', 'active', 'routing → ' + id);
-        if (id !== 'completed'){
-          setAgentState(id, 'active', 'thinking…');
-        }
-        addFeedRow(id, evt.reasoning ? escapeHtml(evt.reasoning) : 'starting…');
-      } else if (evt.status === 'completed'){
-        setAgentState(id, 'done', 'done');
-        if (typeof evt.budget_remaining === 'number'){
-          statBudget.textContent = evt.budget_remaining.toLocaleString();
-        }
-        activeAgent = null;
-      }
-    } else if (evt.type === 'token'){
-      answerText += evt.content;
-      answerEl.innerHTML = escapeHtml(answerText) + '<span class="cursor"></span>';
-    } else if (evt.type === 'done'){
-      // handled by loop end
-    }
   }
 });
 
